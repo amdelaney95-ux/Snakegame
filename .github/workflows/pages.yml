@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for suite in rules campaign endless adventure phone; do
+          for suite in rules campaign endless adventure phone stability; do
             export XDG_DATA_HOME="$RUNNER_TEMP/snake-test-$suite"
             Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script "res://tests/test_$suite.gd" 2>&1 | tee "$RUNNER_TEMP/$suite.log"
             if grep -Eq 'SCRIPT ERROR:|Parse Error:' "$RUNNER_TEMP/$suite.log"; then exit 1; fi
@@ -42,6 +42,8 @@ jobs:
           grep -Eq 'ENDLESS CHECKS: [0-9]+ passed, 0 failed' "$RUNNER_TEMP/endless.log"
           grep -Eq 'ADVENTURE CHECKS: [0-9]+ passed, 0 failed' "$RUNNER_TEMP/adventure.log"
           grep -Eq 'PHONE CHECKS: [0-9]+ passed, 0 failed' "$RUNNER_TEMP/phone.log"
+          grep -Eq 'STABILITY CHECKS: [0-9]+ passed, 0 failed' "$RUNNER_TEMP/stability.log"
+          node tests/test_web_shell.cjs
       - name: Export iPhone PWA
         run: |
           node tools/fetch-web-templates.cjs

@@ -14,6 +14,8 @@ const MEDAL_COLORS := [Color("d6a177"), Color("c4d2dc"), GOLD]
 const MEDAL_NAMES := ["Bronze", "Silver", "Gold"]
 const BOARD := Vector2(48, 214)
 const CELL := 26.0
+const TONE_CACHE_LIMIT := 32
+const FOOD_TONE_MAX_BITES := 14
 var game = Rules.new()
 var regular: Font
 var bold: Font
@@ -52,11 +54,14 @@ var restore_plus: Button
 var restore_confirm: Button
 var restore_cancel: Button
 var players: Array[AudioStreamPlayer] = []
+var tone_streams: Dictionary = {}
 var player_index := 0
 var last_state := ""
+var wall_style: StyleBoxFlat
 
 func _ready() -> void:
 	if OS.has_feature("web"):
+		Engine.max_fps = 60
 		regular = ThemeDB.fallback_font
 		bold = ThemeDB.fallback_font
 	else:
@@ -67,6 +72,7 @@ func _ready() -> void:
 		heavy.font_weight = 700
 		regular = normal
 		bold = heavy
+	wall_style = box(Color("425660"), 4, Color("5a7078"))
 	endless_bests.resize(Rules.STAGES.size())
 	endless_bests.fill(0)
 	adventure_bests.resize(Rules.ADVENTURES.size())
@@ -107,6 +113,9 @@ func _ready() -> void:
 	restore_cancel = make_button("Back", Rect2(490, 577, 120, 36), cancel_restore, false)
 	for i in range(4):
 		var player := AudioStreamPlayer.new()
+		# Web's default Sample backend can reload iOS Safari after repeated sounds
+		# (godotengine/godot#116750). Use the Godot mixer, also the desktop default.
+		player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 		player.volume_db = -16.0
 		add_child(player)
 		players.append(player)
@@ -115,9 +124,17 @@ func _ready() -> void:
 	if OS.has_feature("web"):
 		web_pause_callback = JavaScriptBridge.create_callback(web_backgrounded)
 		JavaScriptBridge.get_interface("document").addEventListener("visibilitychange", web_pause_callback)
+		JavaScriptBridge.get_interface("document").addEventListener("snake-pause", web_pause_callback)
 		JavaScriptBridge.get_interface("window").addEventListener("pagehide", web_pause_callback)
 	sync_buttons()
 	queue_redraw()
+
+func _exit_tree() -> void:
+	if OS.has_feature("web") and web_pause_callback != null:
+		JavaScriptBridge.get_interface("document").removeEventListener("visibilitychange", web_pause_callback)
+		JavaScriptBridge.get_interface("document").removeEventListener("snake-pause", web_pause_callback)
+		JavaScriptBridge.get_interface("window").removeEventListener("pagehide", web_pause_callback)
+		web_pause_callback = null
 
 func make_button(label: String, bounds: Rect2, callback: Callable, primary: bool) -> Button:
 	var button := Button.new()
@@ -161,6 +178,7 @@ func centered(value: String, y: float, font_size: int, color: Color = INK, heavy
 
 func _process(delta: float) -> void:
 	clock_time += delta
+	var animated: bool = game.state == "playing" or not pickup_feedback.is_empty()
 	for kind in pickup_feedback.keys():
 		pickup_feedback[kind].remaining = maxf(0.0, pickup_feedback[kind].remaining - delta)
 		if pickup_feedback[kind].remaining <= 0.0:
@@ -175,7 +193,8 @@ func _process(delta: float) -> void:
 			handle_event(game.step())
 	if game.state != last_state:
 		sync_buttons()
-	queue_redraw()
+	if animated:
+		queue_redraw()
 
 func _notification(what: int) -> void:
 	if what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_APPLICATION_PAUSED]:
@@ -417,7 +436,10 @@ func handle_event(event: String) -> void:
 	if changed:
 		save_progress()
 	match event:
-		"food": tone(620.0 + game.eaten * 45.0, 0.07)
+		"food":
+			# Preserve every Campaign pitch; Endless must not create a new waveform
+			# forever or climb above the audible range as its bite count grows.
+			tone(620.0 + mini(game.eaten, FOOD_TONE_MAX_BITES) * 45.0, 0.07)
 		"shield":
 			confirm_pickup("shield", "Shield used" if game.state == "shield_save" else "Shield ready")
 			tone(350.0, 0.20)
@@ -441,6 +463,20 @@ func confirm_pickup(kind: String, text: String) -> void:
 func tone(frequency: float, duration: float) -> void:
 	if muted or players.is_empty():
 		return
+	var key := Vector2(frequency, duration)
+	var stream: AudioStreamWAV = tone_streams.get(key)
+	if stream == null:
+		stream = create_tone(frequency, duration)
+		# Normal play needs only 22 waveforms. Keep the cache bounded if future
+		# effects add more pitches; active players retain their own references.
+		if tone_streams.size() >= TONE_CACHE_LIMIT:
+			tone_streams.erase(tone_streams.keys()[0])
+		tone_streams[key] = stream
+	players[player_index].stream = stream
+	players[player_index].play()
+	player_index = (player_index + 1) % players.size()
+
+func create_tone(frequency: float, duration: float) -> AudioStreamWAV:
 	var sample_rate := 22050
 	var count := int(sample_rate * duration)
 	var bytes := PackedByteArray()
@@ -454,9 +490,7 @@ func tone(frequency: float, duration: float) -> void:
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = sample_rate
 	stream.data = bytes
-	players[player_index].stream = stream
-	players[player_index].play()
-	player_index = (player_index + 1) % players.size()
+	return stream
 
 func sync_buttons() -> void:
 	if not is_instance_valid(action_button):
@@ -519,6 +553,7 @@ func sync_buttons() -> void:
 				child.text = child.text.replace("→", "").replace("−", "-").strip_edges()
 	if phone_layout:
 		phone.arrange()
+	queue_redraw()
 
 func _draw() -> void:
 	if phone_layout:
@@ -644,7 +679,7 @@ func draw_board() -> void:
 			draw_circle(BOARD + Vector2(x + 0.5, y + 0.5) * CELL, 1.0, Color("29404a"))
 	for wall in game.walls:
 		var p := BOARD + Vector2(wall) * CELL
-		panel(Rect2(p + Vector2(2, 2), Vector2(22, 22)), Color("425660"), 4, Color("5a7078"))
+		draw_style_box(wall_style, Rect2(p + Vector2(2, 2), Vector2(22, 22)))
 		draw_line(p + Vector2(8, 11), p + Vector2(15, 11), Color("7f9399"), 2.0)
 	if game.mode == "adventure":
 		var exit_pos: Vector2 = BOARD + Vector2(game.exit_cell) * CELL

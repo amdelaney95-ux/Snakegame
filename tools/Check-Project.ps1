@@ -22,7 +22,8 @@ $suites = @(
     @{ Name = 'test_campaign'; Marker = 'CAMPAIGN PASS: 10 stages, 95 food' },
     @{ Name = 'test_endless'; Marker = 'ENDLESS CHECKS: \d+ passed, 0 failed' },
     @{ Name = 'test_adventure'; Marker = 'ADVENTURE CHECKS: \d+ passed, 0 failed' },
-    @{ Name = 'test_phone'; Marker = 'PHONE CHECKS: \d+ passed, 0 failed' }
+    @{ Name = 'test_phone'; Marker = 'PHONE CHECKS: \d+ passed, 0 failed' },
+    @{ Name = 'test_stability'; Marker = 'STABILITY CHECKS: \d+ passed, 0 failed' }
 )
 
 try {
@@ -39,7 +40,7 @@ try {
             throw "Suite $($suite.Name) failed. Inspect $logPath"
         }
     }
-    Write-Host 'All five suites passed. Player saves were isolated from these tests.'
+    Write-Host 'All six suites passed. Player saves were isolated from these tests.'
 }
 finally {
     $env:APPDATA = $previousAppData

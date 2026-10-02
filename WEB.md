@@ -42,7 +42,7 @@ The prepared local `docs/` export remains available for manual hosting, but the 
 
 ## Checks
 
-`tools/Check-Project.ps1` runs the rules, full Campaign, Endless, Adventure, and phone suites with isolated saves. Adventure tests include real full-food Gold runs through every maze. Phone tests cover taps, two-finger buffering, continuous swipes, reversal rejection, shield recovery, background pause, ready-screen time, and portrait/landscape geometry.
+`tools/Check-Project.ps1` runs the rules, full Campaign, Endless, Adventure, phone, and stability suites with isolated saves. Adventure tests include real full-food Gold runs through every maze. Phone tests cover taps, two-finger buffering, continuous swipes, reversal rejection, shield recovery, background pause, ready-screen time, and portrait/landscape geometry. Run `node tests/test_web_shell.cjs` for browser lifecycle checks; GitHub runs both sets before publishing.
 
 Browser verification includes startup, course selection, the ready screen, visible direction controls, browser-record retention across an update, and loading while the local server is unavailable. This is not physical iPhone testing.
 
@@ -55,3 +55,15 @@ Before considering the phone release fully device-verified, check on your iPhone
 - Saved scores after closing and reopening the installed app.
 - Offline launch after the first complete download.
 - An installed update that preserves progress.
+
+## iPhone stability update (2026-10-02)
+
+Sounds use Godot's Stream mixer instead of the web-default Sample backend. Repeated Sample playback is implicated in [Godot issue #116750](https://github.com/godotengine/godot/issues/116750), which reports Safari page reloads. This is a mitigation for a matching upstream report, not confirmation of the user's exact device crash. Stream playback may have more latency on single-threaded web builds.
+
+An isolated browser probe using the shipped 4.7.2 runtime and the original allocation pattern retained 200 sample buffers after 200 sounds finished and all player streams were released. The Stream/reused-waveform comparison completed the same sequence with zero registered Sample buffers. This demonstrates a growing audio registry in the original path, but a desktop-browser probe cannot establish the exact iPhone process-termination cause.
+
+Generated tones share a bounded cache and Endless pitch stops increasing after the final Campaign pitch. Four players remain the maximum. Wall styles are reused, static menus/paused boards no longer rebuild every frame, and web rendering is capped at 60 FPS. Canvas resizing is coalesced and skips unchanged dimensions; touch-device density is capped at 1.5x to reduce drawing-buffer pixel area by 44% compared with 2x.
+
+The shell alone registers the offline worker, with failures handled. Graphics loss offers a deliberate reload. Help pauses play and shows a bounded, device-local diagnostic history, build ID and browser version; no telemetry is sent. An iOS process kill cannot always be logged before it happens, so a new `opened` event alone does not prove a crash.
+
+Existing installations should open online, wait for **Update ready · Reload**, then tap it. Help should show build **2026-10-02-stability-1**. No website-data clearing or reinstall is required; saved scores remain in their existing location.
