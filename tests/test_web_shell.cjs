@@ -13,7 +13,7 @@ class Target {
   click(){this.dispatchEvent({type:'click'});this.onclick?.();}
   focus(){}
 }
-async function fixture({blockedStorage=false, registrationFails=false}={}){
+async function fixture({blockedStorage=false, registrationFails=false, initialSaved=[]}={}){
   const nodes=new Map();
   for(const id of ['canvas','game','status','progress','play','notice','offline','update','help','diagnostics','diagnostic-text','close-help'])nodes.set(id,new Target());
   const canvas=nodes.get('canvas'), dimensions={width:0,height:0};let assignments=0;
@@ -26,9 +26,9 @@ async function fixture({blockedStorage=false, registrationFails=false}={}){
   serviceWorker.getRegistration=async()=>undefined;
   serviceWorker.register=async()=>{registrations++;if(registrationFails)throw Error('storage denied');return registration;};
   serviceWorker.ready=registrationFails?new Promise(()=>{}):Promise.resolve(registration);
-  const saved=new Map(),timers=new Map();let nextTimer=0;
+  const saved=new Map(initialSaved),timers=new Map();let nextTimer=0;
   const context={document,window,URL,Date,Math,Event,performance:{getEntriesByType:()=>[{type:'navigate'}]},
-    location:{href:'https://example.test/Snakegame/',reload:()=>reloads++},navigator:{serviceWorker,userAgent:'Test browser'},
+    location:{href:'https://example.test/Snakegame/',reload:()=>reloads++},navigator:{serviceWorker,userAgent:'Test browser',storage:{estimate:async()=>({usage:42000000,quota:1000000000})}},
     matchMedia:window.matchMedia,localStorage:{getItem:key=>{if(blockedStorage)throw Error('denied');return saved.get(key);},setItem:(key,value)=>{if(blockedStorage)throw Error('denied');saved.set(key,value);}},
     ResizeObserver:class{constructor(fn){observer=fn;}observe(){}},
     setTimeout:fn=>{timers.set(++nextTimer,fn);return nextTimer;},clearTimeout:id=>timers.delete(id),
@@ -58,8 +58,8 @@ async function fixture({blockedStorage=false, registrationFails=false}={}){
   f.serviceWorker.dispatchEvent({type:'controllerchange'});
   assert.equal(f.counts().reloads,0,'worker activation never reloads a running game');
   let pauses=0;f.document.addEventListener('snake-pause',()=>pauses++);
-  f.nodes.get('help').click();assert.equal(pauses,1);assert.equal(f.nodes.get('diagnostics').hidden,false);
-  assert.match(f.nodes.get('diagnostic-text').textContent,/stability-1/);
+  f.nodes.get('help').click();await new Promise(setImmediate);assert.equal(pauses,1);assert.equal(f.nodes.get('diagnostics').hidden,false);
+  assert.match(f.nodes.get('diagnostic-text').textContent,/stability-2/);
   f.nodes.get('close-help').click();assert.equal(f.nodes.get('diagnostics').hidden,true);
   let prevented=false,stopped=false;
   f.canvas.dispatchEvent({type:'webglcontextlost',preventDefault:()=>{prevented=true;},stopImmediatePropagation:()=>{stopped=true;}});
@@ -68,10 +68,26 @@ async function fixture({blockedStorage=false, registrationFails=false}={}){
   assert.equal(f.counts().reloads,0,'context loss offers explicit recovery instead of a reload loop');
   f.nodes.get('play').click();assert.equal(f.counts().reloads,1);
   for(let i=0;i<30;i++)f.window.dispatchEvent({type:'error',message:'test '+i});
-  assert.equal(JSON.parse([...f.saved.values()][0]).length,6,'diagnostics storage is bounded');
+  assert.equal(JSON.parse(f.saved.get([...f.saved.keys()].find(key=>!key.endsWith(':sessions')))).length,6,'diagnostics storage is bounded');
+  const sessionKey=[...f.saved.keys()].find(key=>key.endsWith(':sessions'));
+  for(let i=0;i<500;i++)f.window.snakeReport(JSON.stringify({mode:'endless',state:'playing',length:i,score:i*10,runs_started:i,unknown:'discard'}));
+  f.window.snakeReport('invalid json');
+  const snapshot=JSON.parse(f.saved.get(sessionKey));
+  assert.equal(snapshot.current.snapshot.length,499);
+  assert.equal(snapshot.current.peak_length,499);
+  assert.equal(snapshot.current.snapshot.unknown,undefined);
+  assert.ok(f.saved.get(sessionKey).length<2000,'snapshots overwrite a bounded record');
+  const reopened=await fixture({initialSaved:[...f.saved]});
+  reopened.window.snakeReport(JSON.stringify({mode:'campaign',length:4}));
+  reopened.nodes.get('help').click();await new Promise(setImmediate);
+  const details=JSON.parse(reopened.nodes.get('diagnostic-text').textContent);
+  assert.equal(details.previous_session.snapshot.length,499,'previous run survives a reopen');
+  assert.equal(details.current_session.snapshot.length,4);
+  assert.equal(details.storage.usage_bytes,42000000);
   const unavailable=await fixture({blockedStorage:true,registrationFails:true});
   assert.equal(unavailable.counts().starts,1,'storage denial does not stop the engine');
   assert.equal(unavailable.nodes.get('play').disabled,false);
   assert.match(unavailable.nodes.get('offline').textContent,/unavailable/);
   console.log('WEB SHELL CHECKS: passed (resize bursts, storage denial, recovery, diagnostics, explicit updates).');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

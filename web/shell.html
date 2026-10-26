@@ -38,7 +38,7 @@
     </div></section>
   </main>
   <footer id="footer"><span id="offline">Preparing offline play…</span><button id="update" hidden>Update ready · Reload</button><button id="help">Help</button></footer>
-  <section id="diagnostics" role="dialog" aria-label="Game help" hidden><h2>Game help</h2><p>If play keeps restarting, try Sound off and share these details. They stay on this device.</p><pre id="diagnostic-text"></pre><button id="close-help">Back to game</button></section>
+  <section id="diagnostics" role="dialog" aria-label="Game help" hidden><h2>Game help</h2><p>If play restarts, share these details. They include the last saved gameplay snapshot and stay on this device.</p><pre id="diagnostic-text"></pre><button id="close-help">Back to game</button></section>
   <noscript>Enable JavaScript to play Snake Stages.</noscript>
   <script src="$GODOT_URL"></script>
   <script>
@@ -46,7 +46,7 @@
     const config=$GODOT_CONFIG;
     const canvas=document.getElementById('canvas'),game=document.getElementById('game');
     const status=document.getElementById('status'),progress=document.getElementById('progress'),play=document.getElementById('play'),notice=document.getElementById('notice'),offline=document.getElementById('offline'),update=document.getElementById('update');
-    const build='2026-10-02-stability-1';
+    const build='2026-10-25-stability-2';
     const storageKey='snake-stability:'+new URL('.',location.href).pathname;
     let history=[];
     try{history=JSON.parse(localStorage.getItem(storageKey)||'[]');if(!Array.isArray(history))history=[]}catch(_){}
@@ -55,6 +55,35 @@
       history.push({at:new Date().toISOString(),build,kind,detail:String(detail).slice(0,240)});history=history.slice(-6);
       try{localStorage.setItem(storageKey,JSON.stringify(history))}catch(_){}
     }
+    const sessionKey=storageKey+':sessions';
+    let prior=null;
+    try{const saved=JSON.parse(localStorage.getItem(sessionKey)||'null');if(saved?.current?.build)prior=saved.current}catch(_){}
+    const started=Date.now();
+    const session={build,started:new Date(started).toISOString(),lifecycle:'opened',snapshot:null};
+    let storage={status:'unavailable'};
+    function persistSession(){try{localStorage.setItem(sessionKey,JSON.stringify({previous:prior,current:session}))}catch(_){}}
+    persistSession();
+    window.snakeReport=text=>{
+      try{
+        const data=JSON.parse(text);if(!data||typeof data!=='object')return;
+        const snapshot={};
+        for(const key of ['mode','state','stage','score','length','shield','muted','runs_started','save_error','fps','objects','nodes','draw_calls','render_buffer_bytes','render_video_bytes']){
+          const value=data[key];if(['number','boolean','string'].includes(typeof value))snapshot[key]=typeof value==='string'?value.slice(0,40):value;
+        }
+        session.snapshot={...snapshot,at:new Date().toISOString(),uptime_seconds:Math.round((Date.now()-started)/1000)};
+        // Diagnostic only: absent on engines that don't expose their heap.
+        const heap=engine?.rtenv?.HEAP8?.buffer?.byteLength;
+        if(Number.isFinite(heap))session.snapshot.wasm_heap_bytes=heap;
+        session.peak_length=Math.max(session.peak_length||0,Number(snapshot.length)||0);
+        persistSession();
+      }catch(_){}
+    };
+    async function inspectStorage(){
+      try{if(navigator.storage?.estimate){const estimate=await navigator.storage.estimate();storage={status:'estimated',usage_bytes:estimate.usage,quota_bytes:estimate.quota};session.storage=storage;persistSession()}}catch(_){storage={status:'unavailable'}}
+    }
+    inspectStorage();
+    document.addEventListener('visibilitychange',()=>{session.lifecycle=document.hidden?'backgrounded':'visible';persistSession()});
+    window.addEventListener('pagehide',()=>{session.lifecycle='pagehide';persistSession()});
     const previous=history[history.length-1];
     record('opened',performance.getEntriesByType('navigation')[0]?.type||'navigate');
     let resizeTimer=0;
@@ -72,9 +101,10 @@
     document.addEventListener('visibilitychange',()=>{record(document.hidden?'backgrounded':'visible');if(!document.hidden)scheduleResize()});
     window.addEventListener('pagehide',()=>record('pagehide'));
     window.addEventListener('pageshow',event=>{if(event.persisted){record('restored');scheduleResize()}});
-    document.getElementById('help').addEventListener('click',()=>{
+    document.getElementById('help').addEventListener('click',async()=>{
       document.dispatchEvent(new Event('snake-pause'));
-      document.getElementById('diagnostic-text').textContent=JSON.stringify({build,browser:navigator.userAgent,display:matchMedia('(display-mode: standalone)').matches?'home screen':'browser',events:history},null,2);
+      await inspectStorage();
+      document.getElementById('diagnostic-text').textContent=JSON.stringify({build,browser:navigator.userAgent,display:matchMedia('(display-mode: standalone)').matches?'home screen':'browser',events:history,storage,previous_session:prior,current_session:session},null,2);
       document.getElementById('diagnostics').hidden=false;
     });
     document.getElementById('close-help').addEventListener('click',()=>{document.getElementById('diagnostics').hidden=true;canvas.focus()});

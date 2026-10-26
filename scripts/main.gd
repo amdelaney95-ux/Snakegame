@@ -57,7 +57,13 @@ var players: Array[AudioStreamPlayer] = []
 var tone_streams: Dictionary = {}
 var player_index := 0
 var last_state := ""
+var diagnostic_elapsed := 0.0
+var runs_started := 0
+var last_save_error := OK
 var wall_style: StyleBoxFlat
+var board_dots: ImageTexture
+var segment_texture: ImageTexture
+var shield_circle: ImageTexture
 
 func _ready() -> void:
 	if OS.has_feature("web"):
@@ -72,6 +78,7 @@ func _ready() -> void:
 		heavy.font_weight = 700
 		regular = normal
 		bold = heavy
+	prepare_board_textures()
 	wall_style = box(Color("425660"), 4, Color("5a7078"))
 	endless_bests.resize(Rules.STAGES.size())
 	endless_bests.fill(0)
@@ -136,6 +143,23 @@ func _exit_tree() -> void:
 		JavaScriptBridge.get_interface("window").removeEventListener("pagehide", web_pause_callback)
 		web_pause_callback = null
 
+func report_web_health() -> void:
+	if not OS.has_feature("web"):
+		return
+	# A small snapshot, at most every ten seconds plus lifecycle transitions.
+	# The shell keeps this session and the preceding session on this device only.
+	var data := {"mode":game.mode,"state":game.state,"stage":game.stage + 1,
+		"score":game.score,"length":game.snake.size(),"shield":game.shield,
+		"muted":muted,"runs_started":runs_started,"save_error":last_save_error,
+		"fps":Engine.get_frames_per_second(),
+		"objects":int(Performance.get_monitor(Performance.OBJECT_COUNT)),
+		"nodes":int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
+		"draw_calls":int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+		"render_buffer_bytes":int(Performance.get_monitor(Performance.RENDER_BUFFER_MEM_USED)),
+		"render_video_bytes":int(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED))}
+	# Optional so the project also runs in Godot's default Web shell.
+	JavaScriptBridge.eval("window.snakeReport && window.snakeReport(" + JSON.stringify(JSON.stringify(data)) + ")")
+
 func make_button(label: String, bounds: Rect2, callback: Callable, primary: bool) -> Button:
 	var button := Button.new()
 	button.set_meta("desktop_bounds", bounds)
@@ -177,6 +201,11 @@ func centered(value: String, y: float, font_size: int, color: Color = INK, heavy
 	words(value, Vector2(360 - width / 2, y), font_size, color, heavy)
 
 func _process(delta: float) -> void:
+	if OS.has_feature("web"):
+		diagnostic_elapsed += delta
+		if diagnostic_elapsed >= 10.0:
+			diagnostic_elapsed = 0.0
+			report_web_health()
 	clock_time += delta
 	var animated: bool = game.state == "playing" or not pickup_feedback.is_empty()
 	for kind in pickup_feedback.keys():
@@ -201,6 +230,7 @@ func _notification(what: int) -> void:
 		pause_for_background()
 
 func pause_for_background() -> void:
+	report_web_health()
 	phone.swipe_origins.clear()
 	if game.state == "playing":
 		game.state = "paused"
@@ -290,7 +320,9 @@ func new_run() -> void:
 	var arena: int = selected_stage if game.state == "title" else game.stage
 	if run_mode == "endless" and arena >= cleared_count:
 		return
+	runs_started += 1
 	game.start(run_mode, arena)
+	report_web_health()
 	prepare_phone_start()
 	elapsed = -0.6
 	pickup_feedback.clear()
@@ -409,6 +441,7 @@ func save_progress() -> void:
 		saved.set_value("adventure", "level_%02d" % (i + 1), adventure_bests[i])
 		saved.set_value("adventure", "time_%02d" % (i + 1), adventure_times[i])
 	var error := saved.save("user://progress.cfg")
+	last_save_error = error
 	if error != OK:
 		push_warning("Could not save the high score: " + str(error))
 
@@ -671,12 +704,39 @@ func draw_arena_preview() -> void:
 		words(str(targets[i]) + " pts", Vector2(x - 23, 646), 12, MUTED)
 	words("Fixed pace. No quota. Keep scoring.", Vector2(721, 767), 13, MUTED)
 
+func prepare_board_textures() -> void:
+	# Reuse three small images: rebuilding circles/stylebox polygons every frame
+	# created hundreds to thousands of separate WebGL draws on a long snake.
+	var dots := Image.create(624, 520, false, Image.FORMAT_RGBA8)
+	dots.fill(Color.TRANSPARENT)
+	for y in range(Rules.HEIGHT):
+		for x in range(Rules.WIDTH):
+			for dy in range(2):
+				for dx in range(2):
+					dots.set_pixel(x * 26 + 12 + dx, y * 26 + 12 + dy, Color("29404a"))
+	board_dots = ImageTexture.create_from_image(dots)
+	segment_texture = make_shape_texture(false)
+	shield_circle = make_shape_texture(true)
+
+func make_shape_texture(circle: bool) -> ImageTexture:
+	var shape := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+	var radius := 64.0 * 6.0 / 23.0
+	for y in range(64):
+		for x in range(64):
+			var point := Vector2(x + 0.5, y + 0.5) - Vector2(32, 32)
+			var distance: float
+			if circle:
+				distance = point.length() - 31.0
+			else:
+				var q := point.abs() - Vector2.ONE * (31.0 - radius)
+				distance = q.max(Vector2.ZERO).length() + minf(maxf(q.x, q.y), 0.0) - radius
+			shape.set_pixel(x, y, Color(1, 1, 1, clampf(0.5 - distance, 0.0, 1.0)))
+	return ImageTexture.create_from_image(shape)
+
 func draw_board() -> void:
 	panel(Rect2(40, 206, 640, 536), Color("20333c"), 16, LINE)
 	panel(Rect2(48, 214, 624, 520), Color("13232b"), 8)
-	for y in range(Rules.HEIGHT):
-		for x in range(Rules.WIDTH):
-			draw_circle(BOARD + Vector2(x + 0.5, y + 0.5) * CELL, 1.0, Color("29404a"))
+	draw_texture(board_dots, BOARD)
 	for wall in game.walls:
 		var p := BOARD + Vector2(wall) * CELL
 		draw_style_box(wall_style, Rect2(p + Vector2(2, 2), Vector2(22, 22)))
@@ -699,7 +759,7 @@ func draw_board() -> void:
 	for i in range(game.snake.size() - 1, -1, -1):
 		var p: Vector2 = BOARD + Vector2(game.snake[i]) * CELL
 		var color := GREEN if i == 0 else Color("89bb60").lerp(Color("b8e870"), 1.0 - float(i) / game.snake.size())
-		panel(Rect2(p + Vector2(1.5, 1.5), Vector2(23, 23)), color, 6)
+		draw_texture_rect(segment_texture, Rect2(p + Vector2(1.5, 1.5), Vector2(23, 23)), false, color)
 		if i == 0:
 			var front: Vector2 = Vector2(game.direction) * 5
 			var side := Vector2(-game.direction.y, game.direction.x) * 5
@@ -718,7 +778,7 @@ func draw_snake_shield() -> void:
 		if points.size() > 1:
 			draw_polyline(points, colors[layer], widths[layer], true)
 		for point in points:
-			draw_circle(point, widths[layer] / 2.0, colors[layer], true, -1.0, true)
+			draw_texture_rect(shield_circle, Rect2(point - Vector2.ONE * widths[layer] / 2.0, Vector2.ONE * widths[layer]), false, colors[layer])
 
 func draw_sidebar() -> void:
 	if game.mode == "adventure":

@@ -65,6 +65,15 @@ func run() -> void:
 		player.stop()
 	# Let the mixer drain stopped playbacks from this deliberately rapid burst.
 	await create_timer(0.5).timeout
+	ui.muted = true
+	ui.cleared_count = 10
+	var texture_ids := [ui.board_dots.get_instance_id(), ui.segment_texture.get_instance_id(), ui.shield_circle.get_instance_id()]
+	var child_count: int = ui.get_child_count()
+	for retry in range(1000):
+		ui.new_run()
+	check(ui.game.snake.size() == 4, "one thousand retries reset the snake")
+	check(ui.get_child_count() == child_count, "retries do not accumulate controls or players")
+	check(texture_ids == [ui.board_dots.get_instance_id(), ui.segment_texture.get_instance_id(), ui.shield_circle.get_instance_id()], "retries reuse the same board and snake textures")
 	ui.free()
 	await process_frame
 	print("STABILITY CHECKS: %d passed, %d failed" % [checks - failures, failures])

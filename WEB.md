@@ -67,3 +67,11 @@ Generated tones share a bounded cache and Endless pitch stops increasing after t
 The shell alone registers the offline worker, with failures handled. Graphics loss offers a deliberate reload. Help pauses play and shows a bounded, device-local diagnostic history, build ID and browser version; no telemetry is sent. An iOS process kill cannot always be logged before it happens, so a new `opened` event alone does not prove a crash.
 
 Existing installations should open online, wait for **Update ready · Reload**, then tap it. Help should show build **2026-10-02-stability-1**. No website-data clearing or reinstall is required; saved scores remain in their existing location.
+
+## October 25 stability follow-up
+
+Build `2026-10-25-stability-2` reuses three small textures for board dots, rounded snake segments, and shield caps. A rendered Chromium test at a 585 x 1074 canvas measured 513 -> 31 draw calls for a short snake, 909 -> 31 for 400 segments, and 3319 -> 44 for 400 shielded segments. These are synthetic rendering measurements, not proof of an iPhone crash cause. Engine heap stayed at 77,791,232 bytes during the test; 600 rendered retries did not accumulate nodes or game objects. The regression suite additionally exercises 1,000 resets.
+
+Help now includes the current and preceding session's last gameplay snapshot, run count, length, score, sound/shield state, engine/render measurements, and origin storage estimate where supported. Snapshots overwrite a bounded local record every ten seconds and at run/background transitions; nothing is sent to a server. Engine heap and render counters are partial measurements, not total iOS process memory. A missing exit event cannot distinguish an OS termination from all other ways of closing a page.
+
+The service worker still caches a fixed 14-file bundle and does not cache gameplay or create per-run entries. Save progress overwrites one small file. No engine version or new external dependency is introduced. To update an installed PWA, open it online, use Update ready / Reload when offered, and verify the build under Help. Do not clear website data to update: that can remove saved progress.
